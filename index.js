@@ -6,12 +6,18 @@ const bodyParser = require('body-parser');
 const cron = require('node-cron');
 const cors = require('cors');
 
-const serviceAccount = require('./config/serviceAccountKey.json');
+// const serviceAccount = require('./config/serviceAccountKey.json');
 
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-});
+// admin.initializeApp({
+//     credential: admin.credential.cert(serviceAccount),
+// });
 
+if (!admin.apps.length) {
+    const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+    });
+}
 const db = admin.firestore();
 console.log('Firebase Admin SDK initialized successfully.');
 
