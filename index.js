@@ -773,6 +773,10 @@ cron.schedule('0 8 * * *', async () => {
     }
 });
 
+app.get('/ping', (req, res) => {
+  res.status(200).send('Server is awake!');
+});
+
 // --- Root Endpoint ---
 app.get('/', (req, res) => {
     res.send('Child Vaccination Backend is running!');
