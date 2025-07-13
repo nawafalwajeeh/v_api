@@ -1,399 +1,3 @@
-// // server.js
-// require('dotenv').config();
-// const express = require('express');
-// const admin = require('firebase-admin');
-// const bodyParser = require('body-parser');
-// const cron = require('node-cron');
-// const cors = require('cors');
-
-// // Initialize Firebase Admin SDK using environment variable
-// if (!admin.apps.length) {
-//     try {
-//         const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
-//         admin.initializeApp({
-//             credential: admin.credential.cert(serviceAccount)
-//         });
-//         console.log('Firebase Admin SDK initialized successfully.');
-//     } catch (err) {
-//         console.error('Failed to parse Firebase service account key:', err.message);
-//         process.exit(1);
-//     }
-// }
-
-// const db = admin.firestore();
-// const app = express();
-// const HOST = process.env.HOST || '0.0.0.0';
-// const PORT = process.env.PORT || 3000;
-
-// app.use(cors());
-// app.use(bodyParser.json());
-
-// const ADMIN_DOC_ID = 'admin@admin.com'; // Set your admin Firestore document ID
-
-// function removeUndefined(obj) {
-//     return Object.fromEntries(
-//         Object.entries(obj || {}).filter(([_, v]) => v !== undefined)
-//     );
-// }
-
-// async function sendAndLogNotification(recipientRole, recipientId, title, body, type, data = {}) {
-//     const collections = { parent: 'parents', hospital: 'hospitals', admin: 'admin' };
-//     const collectionName = collections[recipientRole];
-//     if (!collectionName || !recipientId) return false;
-
-//     try {
-//         const doc = await db.collection(collectionName).doc(recipientId).get();
-//         const fcmToken = doc.data()?.fcmToken;
-//         if (!fcmToken) return false;
-
-//         const payload = {
-//             token: fcmToken,
-//             notification: { title, body },
-//             data: Object.fromEntries(
-//                 Object.entries({ type, role: recipientRole, ...data }).map(([k, v]) => [k, String(v)])
-//             )
-//         };
-
-//         await admin.messaging().send(payload);
-//         await db.collection('notifications').add({
-//             recipientRole,
-//             recipientId,
-//             title,
-//             body,
-//             type,
-//             data: removeUndefined(data),
-//             isRead: false,
-//             timestamp: admin.firestore.FieldValue.serverTimestamp(),
-//         });
-//         return true;
-//     } catch (err) {
-//         console.error(`Notification error: ${err.message}`);
-//         return false;
-//     }
-// }
-
-// // Register FCM token
-// app.post('/register-token', async (req, res) => {
-//     const { userId, role, fcmToken } = req.body;
-//     const collections = { parent: 'parents', hospital: 'hospitals', admin: 'admin' };
-//     const collection = collections[role];
-
-//     if (!userId || !role || !fcmToken || !collection) return res.status(400).send('Invalid data');
-//     try {
-//         await db.collection(collection).doc(userId).set({ fcmToken }, { merge: true });
-//         res.send('Token registered');
-//     } catch (e) {
-//         res.status(500).send('Registration failed');
-//     }
-// });
-
-// // Manual send (optional for testing)
-// app.post('/send-notification', async (req, res) => {
-//     const { to, role, title, body, type, data } = req.body;
-//     if (!to || !role || !title || !body) return res.status(400).send('Missing fields');
-//     const ok = await sendAndLogNotification(role, to, title, body, type, data);
-//     res.status(ok ? 200 : 500).send(ok ? 'Sent' : 'Failed');
-// });
-
-// function listenForNewHospitals() {
-//     db.collection('hospitals').onSnapshot(snapshot => {
-//         snapshot.docChanges().forEach(change => {
-//             if (change.type === 'added') {
-//                 const data = change.doc.data();
-//                 sendAndLogNotification('admin', ADMIN_DOC_ID, 'New Hospital Registered!', `Hospital ${data.name} has joined.`, 'new_hospital', { hospitalId: change.doc.id });
-//             }
-//         });
-//     });
-// }
-
-// function listenForAppointments() {
-//     db.collection('appointments').onSnapshot(snapshot => {
-//         snapshot.docChanges().forEach(change => {
-//             const data = change.doc.data();
-//             const id = change.doc.id;
-
-//             if (change.type === 'added' && data.appointmentStatus === 'pending') {
-//                 sendAndLogNotification('hospital', data.hospitalId, 'New Appointment', `${data.childName} has booked a vaccine.`, 'new_appointment', { appointmentId: id });
-//             } else if (change.type === 'modified') {
-//                 const status = data.appointmentStatus;
-//                 const parentId = data.parentEmail;
-//                 const hospitalId = data.hospitalId;
-
-//                 if (status === 'approved') {
-//                     sendAndLogNotification('parent', parentId, 'Appointment Approved', `Your child ${data.childName}'s appointment is approved.`, 'appointment_approved', { appointmentId: id });
-//                 } else if (status === 'completed') {
-//                     sendAndLogNotification('parent', parentId, 'Appointment Completed', `${data.childName}'s vaccine appointment is done.`, 'appointment_completed', { appointmentId: id });
-//                     sendAndLogNotification('hospital', hospitalId, 'Appointment Completed', `Appointment for ${data.childName} completed.`, 'appointment_completed', { appointmentId: id });
-//                 }
-//             }
-//         });
-//     });
-// }
-
-// cron.schedule('0 8 * * *', async () => {
-//     const tomorrow = new Date();
-//     tomorrow.setDate(tomorrow.getDate() + 1);
-//     const dStr = `${tomorrow.getDate().toString().padStart(2, '0')}/${(tomorrow.getMonth()+1).toString().padStart(2, '0')}/${tomorrow.getFullYear()}`;
-
-//     const snap = await db.collection('appointments')
-//         .where('appointmentStatus', '==', 'approved')
-//         .get();
-
-//     for (const doc of snap.docs) {
-//         const data = doc.data();
-//         if (data.appointmentDate === dStr) {
-//             sendAndLogNotification('parent', data.parentEmail, 'Reminder', `Appointment for ${data.childName} is tomorrow.`, 'reminder', { appointmentId: doc.id });
-//         }
-//     }
-// });
-
-// app.get('/', (req, res) => res.send('Vaccination server running'));
-
-// app.listen(PORT, HOST, () => {
-//     console.log(`Server ready at http://${HOST}:${PORT}`);
-//     listenForNewHospitals();
-//     listenForAppointments();
-// });
-//---------v2--------
-// require('dotenv').config();
-
-// const express = require('express');
-// const admin = require('firebase-admin');
-// const bodyParser = require('body-parser');
-// const cron = require('node-cron');
-// const cors = require('cors');
-
-// const app = express();
-// const HOST = process.env.HOST || '0.0.0.0';
-// const PORT = process.env.PORT || 3000;
-
-// // ✅ Firebase Admin Initialization with env variable
-// if (!admin.apps.length) {
-//     try {
-//         const serviceAccount = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
-//         admin.initializeApp({
-//             credential: admin.credential.cert(serviceAccount),
-//         });
-//         console.log('Firebase Admin SDK initialized successfully.');
-//     } catch (error) {
-//         console.error('Error parsing GOOGLE_SERVICE_ACCOUNT_KEY:', error.message);
-//         process.exit(1);
-//     }
-// }
-
-// const db = admin.firestore();
-
-// app.use(cors());
-// app.use(bodyParser.json());
-
-// function removeUndefined(obj) {
-//     if (!obj || typeof obj !== 'object') return {};
-//     return Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== undefined));
-// }
-
-// async function sendAndLogNotification(recipientRole, recipientId, title, body, type, data = {}) {
-//     if (!recipientId || typeof recipientId !== 'string' || recipientId.trim() === '') {
-//         console.warn(`[sendAndLogNotification] Invalid recipientId: ${recipientId}`);
-//         return false;
-//     }
-
-//     const collectionName = {
-//         parent: 'parents',
-//         admin: 'admin',
-//         hospital: 'hospitals'
-//     }[recipientRole];
-
-//     if (!collectionName) {
-//         console.warn(`[sendAndLogNotification] Invalid role: ${recipientRole}`);
-//         return false;
-//     }
-
-//     try {
-//         const userDoc = await db.collection(collectionName).doc(recipientId).get();
-//         const fcmToken = userDoc.data()?.fcmToken;
-
-//         if (!fcmToken) {
-//             console.warn(`[sendAndLogNotification] No FCM token found for ${recipientRole} (${recipientId})`);
-//             return false;
-//         }
-
-//         const stringData = Object.entries({
-//             type, role: recipientRole, recipientId, ...data
-//         }).reduce((acc, [k, v]) => {
-//             if (v !== undefined && v !== null) acc[k] = String(v);
-//             return acc;
-//         }, {});
-
-//         const message = {
-//             token: fcmToken,
-//             notification: { title, body },
-//             data: stringData
-//         };
-
-//         await admin.messaging().send(message);
-//         console.log(`[sendAndLogNotification] Notification sent to ${recipientRole} (${recipientId})`);
-
-//         await db.collection('notifications').add({
-//             recipientRole,
-//             recipientId,
-//             title,
-//             body,
-//             type,
-//             data: removeUndefined(data),
-//             isRead: false,
-//             timestamp: admin.firestore.FieldValue.serverTimestamp()
-//         });
-
-//         return true;
-//     } catch (e) {
-//         console.error(`[sendAndLogNotification] Error sending to ${recipientId}: ${e.message}`);
-//         if (['messaging/registration-token-not-registered', 'messaging/invalid-argument'].includes(e.code)) {
-//             await db.collection(collectionName).doc(recipientId).update({
-//                 fcmToken: admin.firestore.FieldValue.delete()
-//             });
-//             console.warn(`[sendAndLogNotification] Removed invalid FCM token for ${recipientId}`);
-//         }
-//         return false;
-//     }
-// }
-
-// // --- Register/Update FCM Token ---
-// app.post('/register-token', async (req, res) => {
-//     const { userId, role, fcmToken } = req.body;
-//     if (!userId || !role || !fcmToken) {
-//         return res.status(400).send('Missing userId, role, or fcmToken');
-//     }
-
-//     const collectionName = { parent: 'parents', admin: 'admin', hospital: 'hospitals' }[role];
-//     if (!collectionName) return res.status(400).send('Invalid role');
-
-//     try {
-//         await db.collection(collectionName).doc(userId).set({ fcmToken }, { merge: true });
-//         res.status(200).send('FCM Token registered.');
-//     } catch (e) {
-//         console.error(`[register-token] Error: ${e.message}`);
-//         res.status(500).send('Failed to register token.');
-//     }
-// });
-
-// // --- Manual Send ---
-// app.post('/send-notification', async (req, res) => {
-//     const { to, role, title, body, type, data } = req.body;
-//     if (!to || !role || !title || !body) return res.status(400).send('Missing fields');
-//     const success = await sendAndLogNotification(role, to, title, body, type, data);
-//     res.status(success ? 200 : 500).send(success ? 'Sent' : 'Failed');
-// });
-
-// // --- Firestore Listeners ---
-// const ADMIN_DOC_ID = 'admin@admin.com';
-
-// function setupNewHospitalRegistrationListener() {
-//     db.collection('hospitals').onSnapshot(snapshot => {
-//         snapshot.docChanges().forEach(async change => {
-//             if (change.type === 'added') {
-//                 const data = change.doc.data();
-//                 const id = change.doc.id;
-//                 await sendAndLogNotification('admin', ADMIN_DOC_ID, 'New Hospital Registered!',
-//                     `Hospital ${data.name || 'Unnamed'} has joined.`,
-//                     'new_hospital_registration', { hospitalId: id, hospitalName: data.name });
-//             }
-//         });
-//     });
-// }
-
-// function setupNewBookedAppointmentListener() {
-//     db.collection('appointments').onSnapshot(snapshot => {
-//         snapshot.docChanges().forEach(async change => {
-//             if (change.type === 'added') {
-//                 const appt = change.doc.data();
-//                 const id = change.doc.id;
-//                 if (appt.appointmentStatus === 'pending' && appt.hospitalId) {
-//                     await sendAndLogNotification('hospital', appt.hospitalId, 'New Appointment Booked!',
-//                         `A new appointment for ${appt.childName} on ${appt.appointmentDate}`,
-//                         'new_booked_appointment',
-//                         { appointmentId: id, childName: appt.childName, vaccineName: appt.vaccineName, appointmentDate: appt.appointmentDate, appointmentTime: appt.appointmentTime });
-//                 }
-//             }
-//         });
-//     });
-// }
-
-// const appointmentStatusCache = {};
-
-// function setupAppointmentStatusChangeListener() {
-//     db.collection('appointments').onSnapshot(snapshot => {
-//         snapshot.docChanges().forEach(async change => {
-//             if (change.type === 'modified') {
-//                 const id = change.doc.id;
-//                 const appt = change.doc.data();
-//                 const newStatus = appt.appointmentStatus;
-//                 const oldStatus = appointmentStatusCache[id];
-
-//                 if (oldStatus !== newStatus) {
-//                     if (newStatus === 'approved' && appt.parentEmail) {
-//                         await sendAndLogNotification('parent', appt.parentEmail, 'Appointment Approved!',
-//                             `Your child ${appt.childName}'s appointment on ${appt.appointmentDate} has been approved.`,
-//                             'appointment_approved',
-//                             { appointmentId: id, childName: appt.childName, vaccineName: appt.vaccineName, appointmentDate: appt.appointmentDate, appointmentTime: appt.appointmentTime });
-//                     }
-//                     if (newStatus === 'completed' && appt.parentEmail) {
-//                         await sendAndLogNotification('parent', appt.parentEmail, 'Appointment Completed!',
-//                             `Your child's appointment on ${appt.appointmentDate} is complete.`,
-//                             'appointment_completed',
-//                             { appointmentId: id, vaccineName: appt.vaccineName, childName: appt.childName });
-//                     }
-//                     if (newStatus === 'completed' && appt.hospitalId) {
-//                         await sendAndLogNotification('hospital', appt.hospitalId, 'Appointment Completed!',
-//                             `An appointment for ${appt.childName} has been completed.`,
-//                             'appointment_completed',
-//                             { appointmentId: id, vaccineName: appt.vaccineName, childName: appt.childName });
-//                     }
-//                     appointmentStatusCache[id] = newStatus;
-//                 }
-//             }
-//         });
-//     });
-// }
-
-// // --- Cron Job ---
-// cron.schedule('0 8 * * *', async () => {
-//     console.log('[Cron] Running daily reminders...');
-//     const now = new Date();
-//     const targetDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-
-//     const appointments = await db.collection('appointments').where('appointmentStatus', '==', 'approved').get();
-//     for (const doc of appointments.docs) {
-//         const data = doc.data();
-//         const dateStr = data.appointmentDate;
-//         if (!dateStr || !data.parentEmail) continue;
-
-//         const [day, month, year] = dateStr.split('/');
-//         const apptDate = new Date(year, month - 1, day);
-//         if (apptDate.getTime() === targetDate.getTime()) {
-//             await sendAndLogNotification('parent', data.parentEmail,
-//                 'Upcoming Appointment Reminder!',
-//                 `Reminder: Your child has an appointment tomorrow for ${data.vaccineName}.`,
-//                 'reminder_1_day_before',
-//                 { appointmentId: doc.id, childName: data.childName, vaccineName: data.vaccineName, appointmentDate: dateStr, appointmentTime: data.appointmentTime });
-//         }
-//     }
-// });
-
-// // --- Health Check ---
-// app.get('/', (req, res) => {
-//     res.send('Child Vaccination Backend is running.');
-// });
-
-// // --- Server ---
-// app.listen(PORT, HOST, () => {
-//     const url = `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
-//     console.log(`Server running at ${url}`);
-//     setupNewHospitalRegistrationListener();
-//     setupNewBookedAppointmentListener();
-//     setupAppointmentStatusChangeListener();
-// });
-
-
 //-------v1--------
 require('dotenv').config();
 
@@ -510,6 +114,57 @@ async function sendAndLogNotification(recipientRole, recipientId, title, body, t
         return false;
     }
 }
+
+// Add this to your server.js after the other listeners
+function setupScheduledNotificationsListener() {
+    console.log('[Listener] Setting up listener for scheduled notifications...');
+    db.collection('notifications')
+        .where('isScheduled', '==', true)
+        .where('status', '==', 'pending')
+        .onSnapshot(snapshot => {
+            snapshot.docChanges().forEach(async change => {
+                if (change.type === 'added') {
+                    const notification = change.doc.data();
+                    const notificationId = change.doc.id;
+                    const scheduledTime = notification.scheduledTime.toDate();
+                    
+                    // If scheduled time has arrived
+                    if (new Date() >= scheduledTime) {
+                        try {
+                            // Send the notification
+                            const success = await sendAndLogNotification(
+                                notification.recipientRole,
+                                notification.recipientId,
+                                notification.title,
+                                notification.body,
+                                notification.type,
+                                notification.data
+                            );
+                            
+                            // Update status
+                            await db.collection('notifications').doc(notificationId).update({
+                                status: success ? 'delivered' : 'failed',
+                                deliveredAt: admin.firestore.FieldValue.serverTimestamp()
+                            });
+                            
+                        } catch (e) {
+                            console.error(`[Listener] Error processing scheduled notification ${notificationId}: ${e.message}`);
+                            await db.collection('notifications').doc(notificationId).update({
+                                status: 'failed',
+                                error: e.message
+                            });
+                        }
+                    }
+                }
+            });
+        }, err => {
+            console.error('[Listener Error] Scheduled Notifications:', err);
+        });
+}
+
+
+
+
 
 // --- API Endpoint to Register/Update FCM Token ---
 app.post('/register-token', async (req, res) => {
@@ -773,6 +428,52 @@ cron.schedule('0 8 * * *', async () => {
     }
 });
 
+// Add this with your other cron jobs
+cron.schedule('*/5 * * * *', async () => { // Every 5 minutes
+    console.log('[Cron Job] Checking for overdue scheduled notifications...');
+    const now = new Date();
+    
+    try {
+        const overdueNotifications = await db.collection('notifications')
+            .where('isScheduled', '==', true)
+            .where('status', '==', 'pending')
+            .where('scheduledTime', '<=', now)
+            .get();
+            
+        console.log(`[Cron Job] Found ${overdueNotifications.size} overdue scheduled notifications`);
+        
+        for (const doc of overdueNotifications.docs) {
+            const notification = doc.data();
+            try {
+                const success = await sendAndLogNotification(
+                    notification.recipientRole,
+                    notification.recipientId,
+                    notification.title,
+                    notification.body,
+                    notification.type,
+                    notification.data
+                );
+                
+                await doc.ref.update({
+                    status: success ? 'delivered' : 'failed',
+                    deliveredAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+                
+            } catch (e) {
+                console.error(`[Cron Job] Error processing overdue notification ${doc.id}: ${e.message}`);
+                await doc.ref.update({
+                    status: 'failed',
+                    error: e.message
+                });
+            }
+        }
+    } catch (e) {
+        console.error('[Cron Job] Error checking for overdue notifications:', e.message);
+    }
+});
+
+
+
 app.get('/ping', (req, res) => {
   res.status(200).send('Server is awake!');
 });
@@ -792,5 +493,6 @@ app.listen(PORT, HOST, () => {
     setupNewHospitalRegistrationListener();
     setupNewBookedAppointmentListener();
     setupAppointmentStatusChangeListener();
+     setupScheduledNotificationsListener();
     // The cron job is scheduled globally and starts automatically with the process.
 });
