@@ -161,42 +161,6 @@ async function sendAndLogNotification(recipientRole, recipientId, title, body, t
 //             console.error('[Listener Error] Scheduled Notifications:', err);
 //         });
 // }
-
-//-----NEW-----
-// Replace your existing setupScheduledNotificationsListener with this:
-function setupScheduledNotificationsListener() {
-    console.log('[Listener] Setting up robust listener for scheduled notifications...');
-    
-    const query = db.collection('notifications')
-        .where('isScheduled', '==', true)
-        .where('status', '==', 'pending');
-
-    // Real-time listener
-    query.onSnapshot((snapshot) => {
-        snapshot.docChanges().forEach(async (change) => {
-            if (change.type === 'added') {
-                const notification = change.doc.data();
-                const notificationId = change.doc.id;
-                
-                // Convert Firestore Timestamp to Date if needed
-                const scheduledTime = notification.scheduledTime.toDate 
-                    ? notification.scheduledTime.toDate() 
-                    : new Date(notification.scheduledTime);
-
-                console.log(`[Listener] Processing notification ${notificationId} scheduled for ${scheduledTime}`);
-
-                // Immediate processing if time has passed
-                if (new Date() >= scheduledTime) {
-                    await processScheduledNotification(change.doc);
-                }
-                // Future notifications will be handled by the cron job
-            }
-        });
-    }, (err) => {
-        console.error('[Listener Error] Scheduled Notifications:', err);
-    });
-}
-
 // Separate processing function
 async function processScheduledNotification(doc) {
     const notification = doc.data();
@@ -431,6 +395,45 @@ function setupAppointmentStatusChangeListener() {
     });
 }
 
+
+//-----NEW-----
+// Replace your existing setupScheduledNotificationsListener with this:
+function setupScheduledNotificationsListener() {
+    console.log('[Listener] Setting up robust listener for scheduled notifications...');
+    
+    const query = db.collection('notifications')
+        .where('isScheduled', '==', true)
+        .where('status', '==', 'pending');
+
+    // Real-time listener
+    query.onSnapshot((snapshot) => {
+        snapshot.docChanges().forEach(async (change) => {
+            if (change.type === 'added') {
+                const notification = change.doc.data();
+                const notificationId = change.doc.id;
+                
+                // Convert Firestore Timestamp to Date if needed
+                const scheduledTime = notification.scheduledTime.toDate 
+                    ? notification.scheduledTime.toDate() 
+                    : new Date(notification.scheduledTime);
+
+                console.log(`[Listener] Processing notification ${notificationId} scheduled for ${scheduledTime}`);
+
+                // Immediate processing if time has passed
+                if (new Date() >= scheduledTime) {
+                    await processScheduledNotification(change.doc);
+                }
+                // Future notifications will be handled by the cron job
+            }
+        });
+    }, (err) => {
+        console.error('[Listener Error] Scheduled Notifications:', err);
+    });
+}
+
+
+
+
 // --- Cron Job: Parent: One Day Before Approved Appointments Date ---
 cron.schedule('0 8 * * *', async () => {
     console.log('[Cron Job] Running daily 1-day appointment reminder job...');
@@ -580,6 +583,6 @@ app.listen(PORT, HOST, () => {
     setupNewHospitalRegistrationListener();
     setupNewBookedAppointmentListener();
     setupAppointmentStatusChangeListener();
-     setupScheduledNotificationsListener();
+    setupScheduledNotificationsListener();
     // The cron job is scheduled globally and starts automatically with the process.
 });
