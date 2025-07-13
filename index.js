@@ -115,56 +115,121 @@ async function sendAndLogNotification(recipientRole, recipientId, title, body, t
     }
 }
 
-// Add this to your server.js after the other listeners
-function setupScheduledNotificationsListener() {
-    console.log('[Listener] Setting up listener for scheduled notifications...');
-    db.collection('notifications')
-        .where('isScheduled', '==', true)
-        .where('status', '==', 'pending')
-        .onSnapshot(snapshot => {
-            snapshot.docChanges().forEach(async change => {
-                if (change.type === 'added') {
-                    const notification = change.doc.data();
-                    const notificationId = change.doc.id;
-                    const scheduledTime = notification.scheduledTime.toDate();
+// // Add this to your server.js after the other listeners
+// function setupScheduledNotificationsListener() {
+//     console.log('[Listener] Setting up listener for scheduled notifications...');
+//     db.collection('notifications')
+//         .where('isScheduled', '==', true)
+//         .where('status', '==', 'pending')
+//         .onSnapshot(snapshot => {
+//             snapshot.docChanges().forEach(async change => {
+//                 if (change.type === 'added') {
+//                     const notification = change.doc.data();
+//                     const notificationId = change.doc.id;
+//                     const scheduledTime = notification.scheduledTime.toDate();
                     
-                    // If scheduled time has arrived
-                    if (new Date() >= scheduledTime) {
-                        try {
-                            // Send the notification
-                            const success = await sendAndLogNotification(
-                                notification.recipientRole,
-                                notification.recipientId,
-                                notification.title,
-                                notification.body,
-                                notification.type,
-                                notification.data
-                            );
+//                     // If scheduled time has arrived
+//                     if (new Date() >= scheduledTime) {
+//                         try {
+//                             // Send the notification
+//                             const success = await sendAndLogNotification(
+//                                 notification.recipientRole,
+//                                 notification.recipientId,
+//                                 notification.title,
+//                                 notification.body,
+//                                 notification.type,
+//                                 notification.data
+//                             );
                             
-                            // Update status
-                            await db.collection('notifications').doc(notificationId).update({
-                                status: success ? 'delivered' : 'failed',
-                                deliveredAt: admin.firestore.FieldValue.serverTimestamp()
-                            });
+//                             // Update status
+//                             await db.collection('notifications').doc(notificationId).update({
+//                                 status: success ? 'delivered' : 'failed',
+//                                 deliveredAt: admin.firestore.FieldValue.serverTimestamp()
+//                             });
                             
-                        } catch (e) {
-                            console.error(`[Listener] Error processing scheduled notification ${notificationId}: ${e.message}`);
-                            await db.collection('notifications').doc(notificationId).update({
-                                status: 'failed',
-                                error: e.message
-                            });
-                        }
-                    }
+//                         } catch (e) {
+//                             console.error(`[Listener] Error processing scheduled notification ${notificationId}: ${e.message}`);
+//                             await db.collection('notifications').doc(notificationId).update({
+//                                 status: 'failed',
+//                                 error: e.message
+//                             });
+//                         }
+//                     }
+//                 }
+//             });
+//         }, err => {
+//             console.error('[Listener Error] Scheduled Notifications:', err);
+//         });
+// }
+
+//-----NEW-----
+// Replace your existing setupScheduledNotificationsListener with this:
+function setupScheduledNotificationsListener() {
+    console.log('[Listener] Setting up robust listener for scheduled notifications...');
+    
+    const query = db.collection('notifications')
+        .where('isScheduled', '==', true)
+        .where('status', '==', 'pending');
+
+    // Real-time listener
+    query.onSnapshot((snapshot) => {
+        snapshot.docChanges().forEach(async (change) => {
+            if (change.type === 'added') {
+                const notification = change.doc.data();
+                const notificationId = change.doc.id;
+                
+                // Convert Firestore Timestamp to Date if needed
+                const scheduledTime = notification.scheduledTime.toDate 
+                    ? notification.scheduledTime.toDate() 
+                    : new Date(notification.scheduledTime);
+
+                console.log(`[Listener] Processing notification ${notificationId} scheduled for ${scheduledTime}`);
+
+                // Immediate processing if time has passed
+                if (new Date() >= scheduledTime) {
+                    await processScheduledNotification(change.doc);
                 }
-            });
-        }, err => {
-            console.error('[Listener Error] Scheduled Notifications:', err);
+                // Future notifications will be handled by the cron job
+            }
         });
+    }, (err) => {
+        console.error('[Listener Error] Scheduled Notifications:', err);
+    });
 }
 
+// Separate processing function
+async function processScheduledNotification(doc) {
+    const notification = doc.data();
+    const notificationId = doc.id;
 
+    try {
+        console.log(`[Processing] Attempting to send scheduled notification ${notificationId}`);
+        
+        const success = await sendAndLogNotification(
+            notification.recipientRole,
+            notification.recipientId,
+            notification.title,
+            notification.body,
+            notification.type,
+            notification.data
+        );
 
+        await doc.ref.update({
+            status: success ? 'delivered' : 'failed',
+            deliveredAt: admin.firestore.FieldValue.serverTimestamp(),
+            processingAttempts: admin.firestore.FieldValue.increment(1)
+        });
 
+        console.log(`[Processing] Notification ${notificationId} ${success ? 'delivered' : 'failed'}`);
+    } catch (error) {
+        console.error(`[Processing] Error processing ${notificationId}:`, error);
+        await doc.ref.update({
+            status: 'error',
+            error: error.message,
+            processingAttempts: admin.firestore.FieldValue.increment(1)
+        });
+    }
+}
 
 // --- API Endpoint to Register/Update FCM Token ---
 app.post('/register-token', async (req, res) => {
@@ -428,51 +493,73 @@ cron.schedule('0 8 * * *', async () => {
     }
 });
 
-// Add this with your other cron jobs
-cron.schedule('*/5 * * * *', async () => { // Every 5 minutes
-    console.log('[Cron Job] Checking for overdue scheduled notifications...');
+// // Add this with your other cron jobs
+// cron.schedule('*/5 * * * *', async () => { // Every 5 minutes
+//     console.log('[Cron Job] Checking for overdue scheduled notifications...');
+//     const now = new Date();
+    
+//     try {
+//         const overdueNotifications = await db.collection('notifications')
+//             .where('isScheduled', '==', true)
+//             .where('status', '==', 'pending')
+//             .where('scheduledTime', '<=', now)
+//             .get();
+            
+//         console.log(`[Cron Job] Found ${overdueNotifications.size} overdue scheduled notifications`);
+        
+//         for (const doc of overdueNotifications.docs) {
+//             const notification = doc.data();
+//             try {
+//                 const success = await sendAndLogNotification(
+//                     notification.recipientRole,
+//                     notification.recipientId,
+//                     notification.title,
+//                     notification.body,
+//                     notification.type,
+//                     notification.data
+//                 );
+                
+//                 await doc.ref.update({
+//                     status: success ? 'delivered' : 'failed',
+//                     deliveredAt: admin.firestore.FieldValue.serverTimestamp()
+//                 });
+                
+//             } catch (e) {
+//                 console.error(`[Cron Job] Error processing overdue notification ${doc.id}: ${e.message}`);
+//                 await doc.ref.update({
+//                     status: 'failed',
+//                     error: e.message
+//                 });
+//             }
+//         }
+//     } catch (e) {
+//         console.error('[Cron Job] Error checking for overdue notifications:', e.message);
+//     }
+// });
+
+// Replace your existing cron job with this:
+cron.schedule('*/5 * * * * *', async () => { // Every 2 seconds for testing, change to '*/5 * * * *' for production
+    console.log('[Cron Job] Checking for pending scheduled notifications...');
     const now = new Date();
     
     try {
-        const overdueNotifications = await db.collection('notifications')
+        const batchSize = 10;
+        const query = db.collection('notifications')
             .where('isScheduled', '==', true)
             .where('status', '==', 'pending')
             .where('scheduledTime', '<=', now)
-            .get();
-            
-        console.log(`[Cron Job] Found ${overdueNotifications.size} overdue scheduled notifications`);
-        
-        for (const doc of overdueNotifications.docs) {
-            const notification = doc.data();
-            try {
-                const success = await sendAndLogNotification(
-                    notification.recipientRole,
-                    notification.recipientId,
-                    notification.title,
-                    notification.body,
-                    notification.type,
-                    notification.data
-                );
-                
-                await doc.ref.update({
-                    status: success ? 'delivered' : 'failed',
-                    deliveredAt: admin.firestore.FieldValue.serverTimestamp()
-                });
-                
-            } catch (e) {
-                console.error(`[Cron Job] Error processing overdue notification ${doc.id}: ${e.message}`);
-                await doc.ref.update({
-                    status: 'failed',
-                    error: e.message
-                });
-            }
-        }
-    } catch (e) {
-        console.error('[Cron Job] Error checking for overdue notifications:', e.message);
+            .limit(batchSize);
+
+        const snapshot = await query.get();
+        console.log(`[Cron Job] Found ${snapshot.size} notifications ready for delivery`);
+
+        const processingPromises = snapshot.docs.map(doc => processScheduledNotification(doc));
+        await Promise.all(processingPromises);
+
+    } catch (error) {
+        console.error('[Cron Job] Error in scheduled notifications check:', error);
     }
 });
-
-
 
 app.get('/ping', (req, res) => {
   res.status(200).send('Server is awake!');
